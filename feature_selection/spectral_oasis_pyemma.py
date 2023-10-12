@@ -243,7 +243,7 @@ class spectral_oasis(object):
             elif not self._covariance and lagtime is None:
                 raise ValueError("The argument covariance has conflict with argument lagtime;")
             else:
-                matrix = correlation_matrix(lagtime=100, reverse=True, shrinkage=None)
+                matrix = correlation_matrix(lagtime=lagtime, reverse=True, shrinkage=None)
                 matrix.fit(trajs)
                 self._matrix = matrix.timelagged_covariance
 
