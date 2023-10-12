@@ -61,7 +61,7 @@ class correlation_matrix(object):
         if data.shape[0] <= self._lagtime:
             warnings.warn("The length of the data is shorter than the lagtime: {} < {}.".format(data.shape[0], self._lagtime))
         
-        if self._c00 == None and self._c0t == None and self._ctt == None:
+        if self._c00 is None and self._c0t is None and self._ctt is None:
             self._c00 = np.zeros((self.__num_features, self.__num_features))
             self._c0t = np.zeros((self.__num_features, self.__num_features))
             self._ctt = np.zeros((self.__num_features, self.__num_features))
