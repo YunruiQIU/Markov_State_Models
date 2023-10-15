@@ -217,7 +217,7 @@ class spectral_oasis(object):
             raise ValueError("At least one of the matrix or trajectories need to be the input to perform spectral-oasis;")
         
         ## Input the matrix to do nystrom algorithm
-        if not self._matrix == None:
+        if not self._matrix is None:
             if trajs is None:
                 diff = 0
             else:
