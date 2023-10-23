@@ -38,12 +38,13 @@ def TimeLaggedDataset(trajs=None, lagtime=100, normalize=False, mean=None, std=N
         The time lagged dataset.
     """
 
+    _pastdata = None; _futuredata = None
     for i in tqdm(range(len(trajs)), desc='load data'):
         for j in range(len(trajs[i])-int(lagtime)):
-            try:
+            if _pastdata != None and _futuredata != None:
                 _pastdata.append(trajs[i][j])
                 _futuredata.append(trajs[i][j+lagtime])
-            except UnboundLocalError:
+            else:
                 _pastdata = [trajs[i][j]]
                 _futuredata = [trajs[i][int(j+lagtime)]]
     _pastdata = np.array(_pastdata); _futuredata = np.array(_futuredata)
@@ -116,11 +117,11 @@ def rao_blackwell_ledoit_wolf(covmatrix=None, num_data=None):
     alpha = (num_data-2)/(num_data*(num_data+2))
     beta = ((matrix_dim+1)*num_data - 2) / (num_data*(num_data+2))
 
-    trace_covmatrix_squared = torch.sum(covmatrix*covmatrix)  # np.trace(S.dot(S))
+    trace_covmatrix_squared = torch.sum(covmatrix*covmatrix)  
     U = ((matrix_dim * trace_covmatrix_squared / torch.trace(covmatrix)**2) - 1)
     rho = min(alpha + beta/U, 1)
 
-    F = (torch.trace(covmatrix) / matrix_dim) * torch.eye(matrix_dim)
+    F = (torch.trace(covmatrix) / matrix_dim) * torch.eye(matrix_dim).to(device=covmatrix.device)
     return (1-rho)*covmatrix + rho*F, rho
 
 
@@ -516,6 +517,8 @@ class deep_projector(object):
             self._lobe_timelagged = None
             self._srvnet_train_eigenvals = []
             self._srvnet_validate_eigenvals = []
+            self._normal_mean = None
+            self._normal_eigenvecs = None
         self._train_scores = []
         self._validation_score = []
 
@@ -589,6 +592,59 @@ class deep_projector(object):
     @property
     def validate_score(self):
         return self._validation_score
+    
+
+    @property
+    def srv_normal_mean(self):
+        if self._network_type != 'SRVNet':
+            raise InterruptedError("VAMPNet based model does not need to do any normalization.")
+        else:
+            return self._normal_mean
+        
+    
+    @property
+    def srv_normal_eigenvecs(self):
+        if self._network_type != 'SRVNet':
+            raise InterruptedError("VAMPNet based model does not need to do any normalization.")
+        else:
+            return self._normal_eigenvecs
+    
+
+
+    def _normalize(self, dataloader):
+
+        """
+        Training SRVNet does not pose the orthogonality of the projected collective variables.
+        Need redo the normalization for the neural network projection and then project on ordered orthogonal eigenvectors. 
+        """
+
+        if not self._network_type == "SRVNet":
+            raise InterruptedError("VAMPNet based model does not need to do any normalization.")
+        else:
+
+            with torch.no_grad():
+                __pastdata = None; __futuredata = None
+                for __past_data, __future_data in dataloader:
+                    if __pastdata != None and __futuredata != None:
+                        __pastdata = torch.cat((__pastdata, self.lobe(__past_data)), dim=0)
+                        __futuredata = torch.cat((__futuredata, self.lobe(__future_data)), dim=0)
+                    else:
+                        __pastdata = self.lobe(__past_data); __futuredata = self.lobe(__future_data)
+
+                pastmean = torch.mean(__pastdata, dim=0); futuremean = torch.mean(__futuredata, dim=0)
+                mean = ((pastmean + futuremean) / 2).detach().numpy()
+                c00, c0t, ctt = covariance(pastdata=__pastdata, futuredata=__futuredata, remove_mean=True)
+                _, ct0, ctt = covariance(pastdata=__futuredata, futuredata=__pastdata, remove_mean=True)
+
+                c0 = (c00 + ctt) / 2
+                ct = (c0t + ct0) / 2
+
+                c0 = c0.numpy(); ct = ct.numpy()
+                eigenval, eigenvecs = scipy.linalg.eigh(ct, b=c0)
+                index = np.argsort(eigenval)[::-1]
+                eigenval = eigenval[index]
+                eigenvecs = eigenvecs[:,index]
+        return mean, eigenvecs
 
 
     def partial_fit(self, pastdata, futuredata):
@@ -699,6 +755,9 @@ class deep_projector(object):
                     validation_eigenval = torch.Tensor(validation_eigenval)
                     self._srvnet_validate_eigenvals.append((self.__step, torch.mean(validation_eigenval, dim=0)))
                 print("==>epoch={}, training process={:.2f}%, the validation loss function={};".format(epoch, 100*(epoch+1)/num_epochs, self._validation_score[-1][1]))
+        
+        if self._network_type == "SRVNet":
+            self._normal_mean, self._normal_eigenvecs = self._normalize(dataloader=train_loader)
         return self
     
     
@@ -711,53 +770,23 @@ class deep_projector(object):
             lobe_lagged = deepcopy(self._lobe_timelagged)
         return Network_Model(lobe, lobe_lagged, device=self._device)
     
-
-    def _normalize(self, data, lagtime):
-
-        """
-        Training SRVNet does not pose the orthogonality of the projected collective variables.
-        Need redo the normalization for the neural network projection and then project on ordered orthogonal eigenvectors. 
-        """
-
-        if not self._network_type == "SRVNet":
-            raise InterruptedError("VAMPNet based model does not need to do any normalization.")
-        else:
-
-            pastdata, futuredata = TimeLaggedDataset(trajs=data, lagtime=lagtime, normalize=False)
-            pastmean = torch.mean(pastdata, dim=0); futuremean = torch.mean(futuredata, dim=0)
-            mean = ((pastmean + futuremean) / 2).numpy()
-            c00, c0t, ctt = covariance(pastdata=pastdata, futuredata=futuredata, remove_mean=True)
-            _, ct0, ctt = covariance(pastdata=futuredata, futuredata=pastdata, remove_mean=True)
-
-            c0 = (c00 + ctt) / 2
-            ct = (c0t + ct0) / 2
-
-            c0 = c0.numpy(); ct = ct.numpy()
-            eigenval, eigenvecs = scipy.linalg.eigh(ct, b=c0)
-            index = np.argsort(eigenval)[::-1]
-            eigenval = eigenval[index]
-            eigenvecs = eigenvecs[:,index]
-        return mean, eigenvecs
-    
     
 
-    def transform(self, data, lagtime=None, instantaneous=True):
+    def transform(self, data, instantaneous=True):
         """
         Project trajectories data to leart collective variables.
         For SRVNet, the normalization of network output will be done before final projection.
         """
         if self._network_type == 'SRVNet':
-            assert lagtime != None, "Post-transformaion based on SRVNet should set the lagtime."
             net = deepcopy(self.lobe); net.eval()
             project_data = []
             for _data in map_data(data=data, device=self._device):
                 project_data.append(net(_data).detach().cpu().numpy())
-            _normal_mean, _normal_eigenvecs = self._normalize(data=project_data, lagtime=lagtime)
             output = []
             for i in range(len(project_data)):
-                _output = np.dot((project_data[i]-_normal_mean), _normal_eigenvecs)
+                _output = np.dot((project_data[i]-self._normal_mean), self._normal_eigenvecs)
                 output.append(_output)
-            return output if len(output) > 1 else output[0], _normal_mean, _normal_eigenvecs
+            return output if len(output) > 1 else output[0]
         else:
             if instantaneous:
                 net = self.lobe
