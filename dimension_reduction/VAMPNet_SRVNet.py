@@ -683,7 +683,7 @@ class deep_projector(object):
             rev_propogator = reverse_propogator(pastdata=_pastproject, futuredata=_futureproject, epsilon=self.__epsilon, 
                                                 method=self.__covariance_method)
             _eigenval, _ = torch.linalg.eigh(rev_propogator)
-            self._srvnet_train_eigenvals.append((self.__step, torch.flip(_eigenval[-int(_pastproject.shape[1]):], dims=[0]).detach().numpy()))
+            self._srvnet_train_eigenvals.append((self.__step, torch.flip(_eigenval[-int(_pastproject.shape[1]):], dims=[0]).detach().cpu().numpy()))
         self.__step +=1
 
         return self
@@ -720,7 +720,7 @@ class deep_projector(object):
                                                     epsilon=self.__epsilon, method=self.__covariance_method)
                 _eigenval, _ = torch.linalg.eigh(rev_propogator)
                 _eigenval = torch.flip(_eigenval[-int(_val_pastproject.shape[1]):], dims=[0]).detach()
-                return -_val_score.item(), _eigenval.numpy()
+                return -_val_score.item(), _eigenval.cpu().numpy()
             else:
                 return -_val_score.item()
     
