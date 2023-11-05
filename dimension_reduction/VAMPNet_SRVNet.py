@@ -632,7 +632,7 @@ class deep_projector(object):
                         __pastdata = self.lobe(__past_data); __futuredata = self.lobe(__future_data)
 
                 pastmean = torch.mean(__pastdata, dim=0); futuremean = torch.mean(__futuredata, dim=0)
-                mean = ((pastmean + futuremean) / 2).detach().numpy()
+                mean = ((pastmean + futuremean) / 2).detach().cpu().numpy()
                 c00, c0t, ctt = covariance(pastdata=__pastdata, futuredata=__futuredata, remove_mean=True)
                 _, ct0, ctt = covariance(pastdata=__futuredata, futuredata=__pastdata, remove_mean=True)
 
